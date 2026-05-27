@@ -228,8 +228,8 @@
         try {
             // 1. 扫描过滤设备
             const device = await navigator.bluetooth.requestDevice({
-                filters: [{ namePrefix: 'ESP32' }], // 兼容前缀过滤
-                optionalServices: [SERVICE_UUID]
+                acceptAllDevices: true,             // 👈 允许显示周围所有蓝牙设备
+                optionalServices: [SERVICE_UUID]    // 👈 这一行必须保留，否则后续会无法获取服务
             });
 
             statusBar.innerText = `发现节点: ${device.name}，正在建立GATT握手...`;
