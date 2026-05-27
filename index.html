@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 幻彩中控核心 v3.0 (H5)</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --panel-bg: #161b22;
+            --border-color: #30363d;
+            --text-color: #ffffff;
+            --text-gray: #8b949e;
+            --cyan-glow: #00ffff;
+            --pulse-blue: #00aaff;
+            --warn-red: #ff4444;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Courier New', monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 450px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        h1 {
+            text-align: center;
+            margin: 0;
+            font-size: 28px;
+            color: var(--cyan-glow);
+            font-family: 'Impact', sans-serif;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-gray);
+            font-size: 11px;
+            margin-top: -10px;
+            margin-bottom: 10px;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .panel-title {
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--text-gray);
+            margin-top: -25px;
+            margin-bottom: 15px;
+            background-color: var(--bg-color);
+            width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 0 10px;
+        }
+
+        button {
+            background-color: #21262d;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: #c9d1d9;
+            padding: 8px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        button:active {
+            background-color: var(--bg-color);
+        }
+
+        /* 初始化按钮特调 */
+        #btn-connect {
+            width: 100%;
+            border-color: var(--cyan-glow);
+            color: var(--cyan-glow);
+            font-weight: bold;
+            font-size: 15px;
+            padding: 12px;
+            background: rgba(0, 255, 255, 0.05);
+        }
+
+        #status-bar {
+            text-align: center;
+            color: #ffcc00;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        /* 模式控制 */
+        .mode-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .btn-mode {
+            padding: 12px;
+            border-color: var(--cyan-glow);
+            background: rgba(0, 255, 255, 0.02);
+        }
+
+        /* 矩阵控制行 */
+        .matrix-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+        .matrix-row:last-child { margin-bottom: 0; }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            background-color: #444444;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+
+        .led-name {
+            font-size: 13px;
+            color: #c9d1d9;
+            flex-grow: 1;
+        }
+
+        /* 全局紧急按钮 */
+        #btn-global-off {
+            width: 100%;
+            border-color: var(--warn-red);
+            color: var(--warn-red);
+            background: rgba(255, 68, 68, 0.05);
+            padding: 14px;
+            font-weight: bold;
+            font-size: 15px;
+        }
+
+        /* 状态变色类 */
+        .status-on { background-color: #00ff00; box-shadow: 0 0 8px #00ff00; }
+        .status-pulse { background-color: var(--pulse-blue); box-shadow: 0 0 8px var(--pulse-blue); }
+        .status-off { background-color: #444444; box-shadow: none; }
+
+        /* 没连接时禁用面板视觉 */
+        .disabled {
+            opacity: 0.3;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>TERMINAL.CORE</h1>
+    <div class="subtitle">System Controller v3.0 - Web BLE Native</div>
+
+    <div class="panel" id="conn-panel">
+        <button id="btn-connect" onclick="requestBleConnection()">[ 初始化蓝牙连线 ]</button>
+        <div id="status-bar">等待连线...</div>
+    </div>
+
+    <div class="panel disabled" id="mode-panel">
+        <div class="panel-title">全局模式接管</div>
+        <div class="mode-grid">
+            <button class="btn-mode" onclick="sendCmd('led')">🎵 音乐走马灯</button>
+            <button class="btn-mode" onclick="sendCmd('audio')">🎙️ 声控 HUD</button>
+        </div>
+    </div>
+
+    <div class="panel disabled" id="matrix-panel">
+        <div class="panel-title">独立矩阵阵列 (三态控制)</div>
+        <div id="matrix-container"></div>
+    </div>
+
+    <button id="btn-global-off" class="disabled" onclick="executeGlobalShutdown()">⛔ 核心休眠 (全部关闭)</button>
+</div>
+
+<script>
+    // 硬件通信常量配置
+    const TARGET_NAME_SUBSTR = "ESP32-C3-Light"; 
+    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+    let bleCharacteristic = null;
+    let pulseTimers = {};
+
+    const ledConfigs = [
+        {id: 0, name: "引脚 3 "}, {id: 1, name: "引脚 7 "},
+        {id: 2, name: "引脚 2 "}, {id: 3, name: "引脚 10"},
+        {id: 4, name: "引脚 6 "}, {id: 5, name: "引脚 8 "}
+    ];
+
+    // 动态渲染 6 路控制按键
+    const container = document.getElementById('matrix-container');
+    ledConfigs.forEach(cfg => {
+        const row = document.createElement('div');
+        row.className = 'matrix-row';
+        row.innerHTML = `
+            <div class="indicator" id="ind-${cfg.id}"></div>
+            <div class="led-name">${cfg.name}</div>
+            <button onclick="executeLedAction(${cfg.id}, 'on')">常亮</button>
+            <button onclick="executeLedAction(${cfg.id}, 'off')">关闭</button>
+            <button onclick="executeLedAction(${cfg.id}, 'pulse')">5s 脉冲</button>
+        `;
+        container.appendChild(row);
+    });
+
+    // 核心蓝牙连接逻辑
+    async function requestBleConnection() {
+        const statusBar = document.getElementById('status-bar');
+        statusBar.innerText = "正在拉起系统蓝牙选择器...";
+        
+        try {
+            // 1. 扫描过滤设备
+            const device = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'ESP32' }], // 兼容前缀过滤
+                optionalServices: [SERVICE_UUID]
+            });
+
+            statusBar.innerText = `发现节点: ${device.name}，正在建立GATT握手...`;
+
+            // 2. 建立 GATT 连接
+            const server = await device.gatt.connect();
+            statusBar.innerText = "正在搜寻特定空中总线服务...";
+
+            // 3. 获取服务与特征
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            bleCharacteristic = await service.getCharacteristic(RX_UUID);
+
+            // 4. UI 状态解禁切换
+            statusBar.innerText = "蓝牙总线连通 [ONLINE]";
+            document.getElementById('conn-panel').style.display = 'none'; // 隐藏连接面板
+            document.getElementById('mode-panel').classList.remove('disabled');
+            document.getElementById('matrix-panel').classList.remove('disabled');
+            document.getElementById('btn-global-off').classList.remove('disabled');
+
+            // 监听断开事件
+            device.addEventListener('gattserverdisconnected', () => {
+                alert("蓝牙链路意外断开！页面即将刷新...");
+                location.reload();
+            });
+
+        } catch (error) {
+            statusBar.innerText = `连线终止: ${error.message || error}`;
+            console.error(error);
+        }
+    }
+
+    // 底层原始数据帧投递
+    async function sendCmd(cmdText) {
+        if (!bleCharacteristic) return;
+        try {
+            const encoder = new TextEncoder();
+            await bleCharacteristic.writeValue(encoder.encode(cmdText));
+            console.log(`空中总线发出 >> ${cmdText}`);
+        } catch (err) {
+            console.error("数据发送失败:", err);
+        }
+    }
+
+    // 独立通道状态机驱动
+    function executeLedAction(ledIdx, actionMode) {
+        // 1. 投递指令
+        sendCmd(`${actionMode}_${ledIdx}`);
+
+        // 2. 清理本地可能残存的脉冲倒计时
+        if (pulseTimers[ledIdx]) {
+            clearTimeout(pulseTimers[ledIdx]);
+            delete pulseTimers[ledIdx];
+        }
+
+        // 3. UI 变换
+        const ind = document.getElementById(`ind-${ledIdx}`);
+        ind.className = 'indicator'; // 重置
+        
+        if (actionMode === 'on') {
+            ind.classList.add('status-on');
+        } else if (actionMode === 'off') {
+            ind.classList.add('status-off');
+        } else if (actionMode === 'pulse') {
+            ind.classList.add('status-pulse');
+            // 5秒后自动安全同步灭灯状态
+            pulseTimers[ledIdx] = setTimeout(() => {
+                ind.className = 'indicator status-off';
+                delete pulseTimers[ledIdx];
+            }, 5000);
+        }
+    }
+
+    // 一键全局休眠
+    function executeGlobalShutdown() {
+        sendCmd('off_all');
+        ledConfigs.forEach(cfg => {
+            if (pulseTimers[cfg.id]) clearTimeout(pulseTimers[cfg.id]);
+            document.getElementById(`ind-${cfg.id}`).className = 'indicator status-off';
+        });
+        pulseTimers = {};
+    }
+</script>
+</body>
+</html>
